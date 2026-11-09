@@ -1,0 +1,330 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Remote Suara AC</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;600;800&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/mqtt@5.10.1/dist/mqtt.min.js"></script>
+<style>
+  :root {
+    --bg: #e9eef1;
+    --panel: #f7fafb;
+    --ink: #14262e;
+    --muted: #5b6e77;
+    --line: #c8d4da;
+    --accent: #0e7c86;
+    --accent-ink: #ffffff;
+    --live: #c0392b;
+    --ok: #1f8a4c;
+    color-scheme: light;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #0f1b20;
+      --panel: #16272e;
+      --ink: #e4eef2;
+      --muted: #93a8b1;
+      --line: #2a3f48;
+      --accent: #36b6c1;
+      --accent-ink: #062226;
+      --live: #ef6a5b;
+      --ok: #4cc47f;
+      color-scheme: dark;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; }
+  body {
+    background: var(--bg);
+    color: var(--ink);
+    font-family: "Manrope", system-ui, -apple-system, "Segoe UI", sans-serif;
+    line-height: 1.5;
+    min-height: 100vh;
+    padding: 24px 16px 48px;
+  }
+  main { max-width: 520px; margin: 0 auto; }
+  header { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+  h1 { font-size: 1.35rem; font-weight: 800; margin: 0; letter-spacing: -0.01em; }
+  .status {
+    display: inline-flex; align-items: center; gap: 8px;
+    font-size: 0.85rem; font-weight: 600; color: var(--muted);
+    border: 1px solid var(--line); border-radius: 999px; padding: 4px 12px;
+    background: var(--panel);
+  }
+  .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); }
+  .status.on .dot { background: var(--ok); }
+  .status.on { color: var(--ink); }
+
+  .stage { text-align: center; padding: 40px 0 28px; }
+  #mic {
+    width: 132px; height: 132px; border-radius: 50%;
+    border: 0; cursor: pointer;
+    background: var(--accent); color: var(--accent-ink);
+    display: inline-flex; align-items: center; justify-content: center;
+    box-shadow: 0 0 0 10px color-mix(in srgb, var(--accent) 18%, transparent);
+    transition: box-shadow .2s, background .2s;
+  }
+  #mic svg { width: 52px; height: 52px; }
+  #mic.listening {
+    background: var(--live);
+    animation: pulse 1.4s ease-in-out infinite;
+  }
+  @keyframes pulse {
+    0%, 100% { box-shadow: 0 0 0 8px color-mix(in srgb, var(--live) 25%, transparent); }
+    50%      { box-shadow: 0 0 0 22px color-mix(in srgb, var(--live) 8%, transparent); }
+  }
+  @media (prefers-reduced-motion: reduce) { #mic.listening { animation: none; } }
+  #mic:focus-visible, button:focus-visible, input:focus-visible, summary:focus-visible {
+    outline: 3px solid var(--ink); outline-offset: 3px;
+  }
+  .hint { margin: 22px 0 6px; color: var(--muted); font-size: 0.9rem; min-height: 1.4em; }
+  #transcript {
+    font-size: 1.3rem; font-weight: 600; min-height: 2.8em;
+    display: flex; align-items: center; justify-content: center;
+    padding: 0 8px; overflow-wrap: anywhere;
+  }
+  #transcript.interim { color: var(--muted); }
+
+  .quick { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-bottom: 20px; }
+  .quick button {
+    font: inherit; font-weight: 600; font-size: 0.9rem;
+    padding: 12px 8px; cursor: pointer;
+    background: var(--panel); color: var(--ink);
+    border: 1px solid var(--line); border-radius: 10px;
+  }
+  .quick button:hover { border-color: var(--accent); }
+
+  details { border-top: 1px solid var(--line); padding: 14px 0; }
+  summary { cursor: pointer; font-weight: 600; }
+  .field { display: block; margin-top: 12px; font-size: 0.85rem; color: var(--muted); }
+  .field input {
+    display: block; width: 100%; margin-top: 4px;
+    font: inherit; color: var(--ink);
+    background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
+    padding: 9px 11px;
+  }
+  .apply {
+    margin-top: 14px; font: inherit; font-weight: 600; cursor: pointer;
+    background: var(--accent); color: var(--accent-ink);
+    border: 0; border-radius: 8px; padding: 9px 16px;
+  }
+
+  h2 { font-size: 1rem; margin: 24px 0 8px; }
+  #log { list-style: none; margin: 0; padding: 0; border-top: 1px solid var(--line); }
+  #log li {
+    display: flex; justify-content: space-between; gap: 12px;
+    padding: 10px 0; border-bottom: 1px solid var(--line); font-size: 0.92rem;
+  }
+  #log time { color: var(--muted); white-space: nowrap; font-variant-numeric: tabular-nums; }
+  #log .empty { color: var(--muted); }
+  .warn { color: var(--live); font-size: 0.88rem; margin-top: 12px; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>Remote Suara AC</h1>
+    <span class="status" id="status" role="status"><span class="dot"></span><span id="statusText">Belum terhubung</span></span>
+  </header>
+
+  <section class="stage">
+    <button id="mic" aria-label="Mulai bicara" aria-pressed="false">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <rect x="9" y="2" width="6" height="12" rx="3"></rect>
+        <path d="M5 11a7 7 0 0 0 14 0"></path>
+        <path d="M12 18v4"></path>
+      </svg>
+    </button>
+    <p class="hint" id="hint">Ketuk mikrofon, lalu ucapkan perintah</p>
+    <div id="transcript" aria-live="polite"></div>
+    <p class="warn" id="warn" hidden></p>
+  </section>
+
+  <div class="quick">
+    <button data-cmd="Menghidupkan AC">Hidupkan AC</button>
+    <button data-cmd="Mematikan AC">Matikan AC</button>
+    <button data-cmd="Atur suhu menjadi 25 derajat">Suhu 25</button>
+  </div>
+
+  <details>
+    <summary>Pengaturan koneksi</summary>
+    <label class="field">Alamat broker (WebSocket)
+      <input id="broker" value="wss://broker.hivemq.com:8884/mqtt" spellcheck="false">
+    </label>
+    <label class="field">Topik perintah
+      <input id="topic" value="iotac-isi-nama-unikmu/perintah" spellcheck="false">
+    </label>
+    <button class="apply" id="apply">Simpan dan hubungkan</button>
+  </details>
+
+  <h2>Perintah terkirim</h2>
+  <ul id="log"><li class="empty">Belum ada perintah.</li></ul>
+</main>
+
+<script>
+(function () {
+  var $ = function (id) { return document.getElementById(id); };
+  var micBtn = $("mic"), hint = $("hint"), transcriptEl = $("transcript"), warn = $("warn");
+  var statusEl = $("status"), statusText = $("statusText");
+  var brokerInput = $("broker"), topicInput = $("topic"), logEl = $("log");
+  var client = null;
+
+  // Ingat pengaturan terakhir (opsional, aman kalau storage tidak tersedia)
+  try {
+    var b = localStorage.getItem("vac_broker"), t = localStorage.getItem("vac_topic");
+    if (b) brokerInput.value = b;
+    if (t) topicInput.value = t;
+  } catch (e) {}
+
+  function setStatus(on, text) {
+    statusEl.classList.toggle("on", on);
+    statusText.textContent = text;
+  }
+
+  // ---------- MQTT ----------
+  function connectMqtt() {
+    if (client) { try { client.end(true); } catch (e) {} client = null; }
+    setStatus(false, "Menghubungkan...");
+    if (typeof mqtt === "undefined") {
+      setStatus(false, "Library MQTT gagal dimuat");
+      return;
+    }
+    client = mqtt.connect(brokerInput.value.trim(), {
+      clientId: "web-ac-" + Math.random().toString(16).slice(2, 8),
+      reconnectPeriod: 3000,
+      connectTimeout: 8000
+    });
+    client.on("connect", function () { setStatus(true, "Terhubung"); });
+    client.on("reconnect", function () { setStatus(false, "Menghubungkan ulang..."); });
+    client.on("offline", function () { setStatus(false, "Offline"); });
+    client.on("error", function () { setStatus(false, "Gagal terhubung"); });
+  }
+
+  // ---------- Kata ke angka (Indonesia) ----------
+  var units = { nol: 0, satu: 1, dua: 2, tiga: 3, empat: 4, lima: 5, enam: 6, tujuh: 7, delapan: 8, sembilan: 9 };
+  function kataKeAngka(text) {
+    var s = text.toLowerCase();
+    var u = Object.keys(units).join("|");
+    s = s.replace(new RegExp("\\b(" + u + ") puluh(?: (" + u + "))?\\b", "g"), function (m, a, c) {
+      return String(units[a] * 10 + (c ? units[c] : 0));
+    });
+    s = s.replace(new RegExp("\\b(" + u + ") belas\\b", "g"), function (m, a) { return String(10 + units[a]); });
+    s = s.replace(/\bsebelas\b/g, "11").replace(/\bsepuluh\b/g, "10");
+    return s;
+  }
+
+  // ---------- Kirim perintah ----------
+  function kirim(teks) {
+    var pesan = kataKeAngka(teks).trim();
+    if (!pesan) return;
+    if (!client || !client.connected) {
+      showWarn("Belum terhubung ke broker. Buka Pengaturan koneksi lalu pilih Simpan dan hubungkan.");
+      return;
+    }
+    client.publish(topicInput.value.trim(), pesan, { qos: 0 }, function (err) {
+      if (err) { showWarn("Gagal mengirim perintah."); return; }
+      showWarn("");
+      tambahLog(pesan);
+    });
+  }
+
+  function tambahLog(pesan) {
+    var empty = logEl.querySelector(".empty");
+    if (empty) empty.remove();
+    var li = document.createElement("li");
+    var span = document.createElement("span");
+    span.textContent = pesan;
+    var time = document.createElement("time");
+    time.textContent = new Date().toLocaleTimeString("id-ID");
+    li.appendChild(span);
+    li.appendChild(time);
+    logEl.insertBefore(li, logEl.firstChild);
+    while (logEl.children.length > 8) logEl.removeChild(logEl.lastChild);
+  }
+
+  function showWarn(msg) {
+    warn.hidden = !msg;
+    warn.textContent = msg;
+  }
+
+  // ---------- Pengenalan suara ----------
+  var SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  var rec = null, listening = false;
+
+  if (!SR) {
+    micBtn.disabled = true;
+    micBtn.style.opacity = 0.4;
+    hint.textContent = "Browser ini tidak mendukung pengenalan suara.";
+    showWarn("Pakai Chrome atau Edge. Tombol cepat di bawah tetap bisa dipakai.");
+  } else {
+    rec = new SR();
+    rec.lang = "id-ID";
+    rec.interimResults = true;
+    rec.continuous = false;
+
+    rec.onstart = function () {
+      listening = true;
+      micBtn.classList.add("listening");
+      micBtn.setAttribute("aria-pressed", "true");
+      micBtn.setAttribute("aria-label", "Berhenti mendengarkan");
+      hint.textContent = "Mendengarkan...";
+      transcriptEl.textContent = "";
+    };
+    rec.onresult = function (e) {
+      var teks = "", final = false;
+      for (var i = e.resultIndex; i < e.results.length; i++) {
+        teks += e.results[i][0].transcript;
+        if (e.results[i].isFinal) final = true;
+      }
+      transcriptEl.textContent = teks;
+      transcriptEl.classList.toggle("interim", !final);
+      if (final) kirim(teks);
+    };
+    rec.onerror = function (e) {
+      if (e.error === "not-allowed" || e.error === "service-not-allowed") {
+        showWarn("Izin mikrofon ditolak. Izinkan mikrofon di pengaturan browser, atau buka halaman ini lewat localhost atau https.");
+      } else if (e.error === "no-speech") {
+        hint.textContent = "Tidak ada suara terdengar. Coba lagi.";
+      } else if (e.error !== "aborted") {
+        showWarn("Pengenalan suara gagal: " + e.error);
+      }
+    };
+    rec.onend = function () {
+      listening = false;
+      micBtn.classList.remove("listening");
+      micBtn.setAttribute("aria-pressed", "false");
+      micBtn.setAttribute("aria-label", "Mulai bicara");
+      if (hint.textContent === "Mendengarkan...") hint.textContent = "Ketuk mikrofon untuk bicara lagi";
+    };
+
+    micBtn.addEventListener("click", function () {
+      if (listening) { rec.stop(); return; }
+      showWarn("");
+      try { rec.start(); } catch (e) {}
+    });
+  }
+
+  // ---------- Tombol cepat dan pengaturan ----------
+  document.querySelectorAll(".quick button").forEach(function (btn) {
+    btn.addEventListener("click", function () {
+      transcriptEl.classList.remove("interim");
+      transcriptEl.textContent = btn.dataset.cmd;
+      kirim(btn.dataset.cmd);
+    });
+  });
+
+  $("apply").addEventListener("click", function () {
+    try {
+      localStorage.setItem("vac_broker", brokerInput.value.trim());
+      localStorage.setItem("vac_topic", topicInput.value.trim());
+    } catch (e) {}
+    connectMqtt();
+  });
+
+  connectMqtt();
+})();
+</script>
+</body>
+</html>
